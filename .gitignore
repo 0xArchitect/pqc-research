@@ -1,0 +1,17 @@
+# Build directories
+build/
+*/build/
+CMakeFiles/
+
+# CMake
+*.cmake
+*.cache
+*.log
+*.ninja
+*.o
+*.obj
+*.a
+
+# macOS metadata
+.DS_Store
+
