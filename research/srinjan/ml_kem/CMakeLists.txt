@@ -20,3 +20,7 @@ target_include_directories(ml_kem PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Build demo
 add_executable(ml_kem_demo demo_ml_kem.cpp)
 target_link_libraries(ml_kem_demo ml_kem oqs OpenSSL::Crypto)
+
+# Build tests
+add_executable(test_ml_kem test_ml_kem.cpp)
+target_link_libraries(test_ml_kem ml_kem oqs OpenSSL::Crypto)
