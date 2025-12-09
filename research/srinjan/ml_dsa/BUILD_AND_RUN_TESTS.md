@@ -237,11 +237,3 @@ The test suite includes:
 ✅ **Security Tests** - Tampering detection, wrong keys  
 ✅ **Cross-Validation** - Algorithm incompatibility checks  
 ✅ **Performance Benchmarks** - Timing measurements for all operations  
-
-## Need Help?
-
-**Question**: How did you compile `demo_ml_dsa.cpp` previously?
-
-Use the same method for `test_ml_dsa.cpp` and it should work! Just remember to add Google Test libraries.
-
-For detailed documentation, see [TEST_SUITE_README.md](TEST_SUITE_README.md)
