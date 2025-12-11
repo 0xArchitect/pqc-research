@@ -1,36 +1,35 @@
 #include "ml_dsa.hpp"
 
 #include <oqs/oqs.h>
-
 #include <fstream>
 #include <stdexcept>
 #include <mutex>
-#include <iterator>     // istreambuf_iterator
-#include <cstring>      // std::memset
+#include <iterator>
 
+// Only base64 is allowed in core (NOT JSON)
+#include "../utils/base64.hpp"
+
+using namespace std;
+
+// ======================================================================
+//            GLOBAL OQS INITIALIZATION (runs once per process)
+// ======================================================================
 namespace {
 
-/// Initialize liboqs ONCE in process.
 void global_oqs_init() {
     static std::once_flag once;
     std::call_once(once, [] {
-        OQS_init();  // void, CPU feature detection
+        OQS_init(); // CPU feature detection + OQS global init
     });
-}
-
-/// Securely wipe a vector (for secret key use)
-inline void secure_zero(std::vector<uint8_t> &v) {
-    if (!v.empty()) {
-        std::memset(v.data(), 0, v.size());
-    }
 }
 
 } // anonymous namespace
 
-// =======================
-//   Impl definition
-// =======================
 
+
+// ======================================================================
+//                           IMPL STRUCT
+// ======================================================================
 struct MLDSA::Impl {
     OQS_SIG *sig = nullptr;
     std::string alg;
@@ -44,7 +43,7 @@ struct MLDSA::Impl {
 
         sig = OQS_SIG_new(alg.c_str());
         if (!sig) {
-            throw std::runtime_error("Failed to initialize OQS_SIG for: " + alg);
+            throw std::runtime_error("Failed to instantiate ML-DSA object for: " + alg);
         }
     }
 
@@ -53,18 +52,17 @@ struct MLDSA::Impl {
             OQS_SIG_free(sig);
             sig = nullptr;
         }
-        // DO NOT call OQS_cleanup()
-        // other code in process may still need liboqs.
     }
 };
 
-// =======================
-//   MLDSA Public API
-// =======================
+
+
+// ======================================================================
+//                         PUBLIC MLDSA API
+// ======================================================================
 
 MLDSA::MLDSA(const std::string &alg_name)
-    : pImpl(new Impl(alg_name))
-{}
+    : pImpl(new Impl(alg_name)) {}
 
 MLDSA::~MLDSA() {
     delete pImpl;
@@ -74,6 +72,11 @@ std::string MLDSA::algorithm() const {
     return pImpl->alg;
 }
 
+
+
+// ======================================================================
+//                              KEYPAIR
+// ======================================================================
 bool MLDSA::generate_keypair(std::vector<uint8_t> &public_key,
                              std::vector<uint8_t> &secret_key)
 {
@@ -82,17 +85,20 @@ bool MLDSA::generate_keypair(std::vector<uint8_t> &public_key,
     public_key.resize(sig->length_public_key);
     secret_key.resize(sig->length_secret_key);
 
-    OQS_STATUS r = OQS_SIG_keypair(sig,
-                                   public_key.data(),
-                                   secret_key.data());
-    if (r != OQS_SUCCESS) {
-        secure_zero(secret_key);
-        public_key.clear();
-        return false;
-    }
-    return true;
+    OQS_STATUS st = OQS_SIG_keypair(
+        sig,
+        public_key.data(),
+        secret_key.data()
+    );
+
+    return st == OQS_SUCCESS;
 }
 
+
+
+// ======================================================================
+//                                SIGN
+// ======================================================================
 bool MLDSA::sign(std::span<const uint8_t> secret_key,
                  std::span<const uint8_t> message,
                  std::vector<uint8_t> &signature)
@@ -106,11 +112,14 @@ bool MLDSA::sign(std::span<const uint8_t> secret_key,
     signature.resize(sig->length_signature);
     size_t sig_len = signature.size();
 
-    OQS_STATUS r = OQS_SIG_sign(sig,
-                                signature.data(), &sig_len,
-                                message.data(), message.size(),
-                                secret_key.data());
-    if (r != OQS_SUCCESS) {
+    OQS_STATUS st = OQS_SIG_sign(
+        sig,
+        signature.data(), &sig_len,
+        message.data(), message.size(),
+        secret_key.data()
+    );
+
+    if (st != OQS_SUCCESS) {
         signature.clear();
         return false;
     }
@@ -119,6 +128,11 @@ bool MLDSA::sign(std::span<const uint8_t> secret_key,
     return true;
 }
 
+
+
+// ======================================================================
+//                                VERIFY
+// ======================================================================
 bool MLDSA::verify(std::span<const uint8_t> public_key,
                    std::span<const uint8_t> message,
                    std::span<const uint8_t> signature)
@@ -132,20 +146,21 @@ bool MLDSA::verify(std::span<const uint8_t> public_key,
         return false;
     }
 
-    OQS_STATUS r = OQS_SIG_verify(sig,
-                                  message.data(), message.size(),
-                                  signature.data(), signature.size(),
-                                  public_key.data());
+    OQS_STATUS st = OQS_SIG_verify(
+        sig,
+        message.data(), message.size(),
+        signature.data(), signature.size(),
+        public_key.data()
+    );
 
-    // Avoid branching leaks (constant time)
-    // Convert result into mask manually
-    return (r == OQS_SUCCESS);
+    return st == OQS_SUCCESS;
 }
 
-// ===========================
-//   Serialization helpers
-// ===========================
 
+
+// ======================================================================
+//                        BINARY SAVE / LOAD
+// ======================================================================
 bool MLDSA::save_key_to_file(const std::string &filename,
                              std::span<const uint8_t> key)
 {
@@ -154,6 +169,7 @@ bool MLDSA::save_key_to_file(const std::string &filename,
 
     out.write(reinterpret_cast<const char*>(key.data()),
               static_cast<std::streamsize>(key.size()));
+
     return static_cast<bool>(out);
 }
 
@@ -165,6 +181,78 @@ bool MLDSA::load_key_from_file(const std::string &filename,
 
     key.assign(std::istreambuf_iterator<char>(in),
                std::istreambuf_iterator<char>());
+
+    return !key.empty();
+}
+
+
+
+// ======================================================================
+//                      JSON SAVE / LOAD  (Format A)
+// ======================================================================
+//
+// This function writes JSON files like:
+//
+// {
+//     "algorithm": "ML-DSA-87",
+//     "type": "public" | "secret",
+//     "key": "<base64>"
+// }
+//
+// ======================================================================
+
+bool MLDSA::save_key_json(const std::string &filename,
+                          std::span<const uint8_t> key,
+                          bool is_public) const
+{
+    // Build JSON manually — NO JSON library used here
+    std::ofstream out(filename);
+    if (!out) return false;
+
+    out << "{\n";
+    out << "  \"algorithm\": \"" << pImpl->alg << "\",\n";
+    out << "  \"type\": \"" << (is_public ? "public" : "secret") << "\",\n";
+    out << "  \"key\": \"" << mldsa_utils::base64_encode(key) << "\"\n";
+    out << "}\n";
+
+    return true;
+}
+
+
+// ======================================================================
+//                       JSON LOAD  (Format A)
+// ======================================================================
+bool MLDSA::load_key_json(const std::string &filename,
+                          std::vector<uint8_t> &key,
+                          bool &is_public,
+                          std::string &algorithm) const
+{
+    std::ifstream in(filename);
+    if (!in) return false;
+
+    // Simple manual JSON parsing (safe for your controlled format)
+    std::string file((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+
+    auto get_field = [&](const std::string &label) -> std::string {
+        size_t pos = file.find(label);
+        if (pos == std::string::npos) return "";
+        pos = file.find('"', pos + label.size());
+        if (pos == std::string::npos) return "";
+        size_t end = file.find('"', pos + 1);
+        if (end == std::string::npos) return "";
+        return file.substr(pos + 1, end - pos - 1);
+    };
+
+    algorithm = get_field("algorithm");
+    std::string type = get_field("type");
+    std::string key_b64 = get_field("key");
+
+    if (algorithm.empty() || type.empty() || key_b64.empty())
+        return false;
+
+    is_public = (type == "public");
+    key = mldsa_utils::base64_decode(key_b64);
 
     return !key.empty();
 }
