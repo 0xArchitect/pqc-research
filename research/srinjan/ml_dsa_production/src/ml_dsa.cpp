@@ -234,15 +234,22 @@ bool MLDSA::load_key_json(const std::string &filename,
     std::string file((std::istreambuf_iterator<char>(in)),
                      std::istreambuf_iterator<char>());
 
-    auto get_field = [&](const std::string &label) -> std::string {
-        size_t pos = file.find(label);
-        if (pos == std::string::npos) return "";
-        pos = file.find('"', pos + label.size());
-        if (pos == std::string::npos) return "";
-        size_t end = file.find('"', pos + 1);
-        if (end == std::string::npos) return "";
-        return file.substr(pos + 1, end - pos - 1);
-    };
+   auto get_field = [&](const std::string &label) -> std::string {
+    size_t key_pos = file.find("\"" + label + "\"");
+    if (key_pos == std::string::npos) return "";
+
+    size_t colon = file.find(':', key_pos);
+    if (colon == std::string::npos) return "";
+
+    size_t value_start = file.find('"', colon + 1);
+    if (value_start == std::string::npos) return "";
+
+    size_t value_end = file.find('"', value_start + 1);
+    if (value_end == std::string::npos) return "";
+
+    return file.substr(value_start + 1, value_end - value_start - 1);
+};
+
 
     algorithm = get_field("algorithm");
     std::string type = get_field("type");
