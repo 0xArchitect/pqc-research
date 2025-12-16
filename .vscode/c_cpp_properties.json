@@ -8,6 +8,10 @@
                 "${workspaceFolder}/research/srinjan/lwe",
                 "${workspaceFolder}/research/srinjan/ml_dsa_production/include",
                 "${workspaceFolder}/research/srinjan/ml_dsa_production/utils",
+                "${workspaceFolder}/research/srinjan/ml_dsa_production/build/_deps/googletest-src/googletest/include",
+"${workspaceFolder}/research/srinjan/ml_dsa_production/build/_deps/googletest-src/googlemock/include",
+
+
                  "/opt/homebrew/include",
                 "/Users/srinjantambuli/pqc-work/liboqs/build/include",
                 "/opt/homebrew/include",
